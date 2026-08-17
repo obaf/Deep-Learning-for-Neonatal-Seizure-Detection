@@ -1,0 +1,12 @@
+{
+  "name": "final",
+  "arch": "multih",
+  "norm": "patient",
+  "tag": "MULTI",
+  "mixup": 0.2,
+  "chanind": false,
+  "epochs": 45,
+  "seeds": [0, 1, 2],
+  "val_frac": 0.18,
+  "lr": 0.0012
+}

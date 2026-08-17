@@ -1,0 +1,18 @@
+# raw dataset (download via download_data.py from Zenodo, CC-BY 4.0)
+data/*.edf
+data/*.pdf
+data/*.csv
+data/*.mat
+data/zenodo_record.json
+data/proc/
+
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# experiment logs / scratch
+*.log
+*.done
+node_modules/
+package-lock.json
