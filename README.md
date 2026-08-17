@@ -287,7 +287,66 @@ p_per_second = C.predict_seconds(model, d, torch.device("cpu"))
 
 ---
 
-## 7. Building on This Work
+## 7. Summary of Experiments and Findings
+
+### 7.1 Experiment log
+
+Every experiment below ran under the same discipline: patient-wise splits, consensus labels for
+training unless stated, and all threshold/post-processing tuned on validation patients only.
+AUC values are pooled per-second AUC against consensus labels on held-out patients (development
+split = 17 test patients; final CV = 5-fold over all 79 patients).
+
+| # | Experiment (script) | Purpose | Configurations tried | Key outcome |
+|---|---|---|---|---|
+| 1 | Inter-expert variability (`annotations.py`) | Quantify label noise among the 3 experts | Per-second kappa, event matching/overlap clustering | Fleiss kappa **0.756**; only **43%** of events marked by all 3 experts; seizure-time estimates differ by up to 26% |
+| 2 | Classic spectral baselines (`classic.py`) | Non-deep reference points | LightGBM; RBF-SVM | LightGBM **0.751**, SVM 0.688 — feature pipelines plateau well below deep models |
+| 3 | Correlation/coherence SVM (`classic2.py`) | Reproduce the spirit of Tapani's expert-feature SVM | 61 spectral + time-varying correlation/coherence features | **0.725** — our compact feature set does not reach their tuned system |
+| 4 | Architecture comparison (`run_dev.py`) | Find a strong CNN backbone | ShallowCNN, ResNet-1D (S/M/L) | 0.802-0.825; capacity alone does not close the patient-generalisation gap |
+| 5 | Training-recipe ablations (`run_ablate.py`) | Normalisation, labels, augmentation | Per-window vs patient z-score; soft labels; mixup; channel-independent | Patient-norm +0.01, soft labels +0.005, **mixup +0.02**; channel-independent ill-posed with whole-recording labels (discontinued) |
+| 6 | Multi-annotator multi-head (`run_ablate2.py`) | Exploit all 3 experts jointly in one network | One head per expert, shared trunk; +/- denser sampling | **Multi-head 0.833 — best single model**; stride-8 sampling did not help (0.804) |
+| 7 | Window length (`run_win.py`) | Longer seizure context (Tapani used 60-s analysis) | 32 s and 60 s multi-head windows | 32 s: 0.834 (tie), 60 s: 0.821 — 16-32 s is the sweet spot here |
+| 8 | Annotator-transfer matrix (`run_annot.py`) | How label source changes measured performance | Train on A / B / C / consensus; evaluate against all | Spread up to **0.116 AUC**; model trained on B is worst even against B himself (0.683) — consensus denoises |
+| 9 | Final 5-fold CV, 3-seed ensemble (`run_cv.py`) | Headline patient-independent result | `recipe_final.json` (multi-head + mixup + patient-norm) | **AUC(M) 0.809 +/- 0.052** (single seed 0.785 +/- 0.069); GDR 29% @ 0.5 FD/h, 34% @ 1.0 FD/h (post-hoc); burden r = 0.56 |
+| 10 | Aetiology stratification (`figures.py`/`make_paper_numbers.py`) | Which patients fail | Per-patient AUC by clinical group | HIE/ischaemia hardest (median 0.756, n=21); bilateral best (0.840, n=11) — dev-split intuition reversed under full CV |
+
+**One-line conclusions.** (a) Multi-annotator labels are a training signal, not just noise:
+joint 3-expert training beat every single-label variant. (b) Label choice alone shifts measured
+AUC by up to 0.116 — protocol transparency matters more than small architecture gains.
+(c) Remaining failures concentrate in HIE/ischaemic backgrounds, exactly where human experts
+also disagree most.
+
+### 7.2 Comparison with prior work
+
+Numbers below are **as reported by each study**. They are *not* directly comparable: rows differ
+in training data, in whether the evaluation is internal or external, in the metric (pooled
+AUC vs median per-patient AUC), and in the annotator used as ground truth. The "Protocol notes"
+column is the key to an honest reading — this table is precisely why we release every split and
+prediction file.
+
+| Study | Method | Training data | Evaluation | Reported result | Protocol notes / how this work relates |
+|---|---|---|---|---|---|
+| Stevenson et al. 2019 (data paper) | — | — | 79 infants, 3 experts | Fleiss kappa 0.767 among experts | No detector; we reproduce their agreement scale (0.756) and extend with event-level matching |
+| Frassineti et al. 2020 | Stationary wavelets + classifier | Helsinki (internal) | Helsinki | AUC ~0.81 | Comparable internal setting; **our simplest CNN (0.79-0.83) matches or beats it; final system 0.809 CV mean with much stricter tuning discipline** |
+| O'Shea et al. 2020 | Fully convolutional net (per-channel) | Cork (private, own corpus) | Cork (private) | AUC ~0.97 | Not Helsinki; we reproduce this architecture class as our `shallow` baseline; Daly's reproduction of it scored 0.926 when trained on all of Helsinki with an *external* test |
+| Tapani et al. 2019 | SVM + time-varying correlations | Helsinki (internal), patient-wise CV | Helsinki | **Median per-patient AUC 0.988**; GDR ~77-80% @ 0.5-1 FD/h | Median-per-patient metric is far more permissive than pooled AUC (our per-patient medians also run higher); SVM pipeline used per-patient feature normalisation and heavily tuned features. Our event-level GDR is below theirs — the gap is real and discussed in the paper |
+| Daly et al. 2024 | Enhanced ConvNet (45k params) + mixup | **All 79 Helsinki infants** | **External private Cork set** (4,570 h) | AUC 0.963 (0.968 w/ pseudo-labels); GDR 60.3% @ 0.33 FD/h | Trained on *all* of the corpus, tested on different patients *and* a different hospital — easier generalisation regime for AUC; we adopt their preprocessing conventions; under our internal 5-fold CV their baseline class scores ~0.78-0.82 |
+| Hogan et al. 2024 (SOTA) | ConvNeXt-1D, 20.6M params | **202 private Cork neonates** (50,299 channel-hours) | Helsinki (fully held-out) | **Pooled AUC 0.982**; expert-equivalent (delta-kappa) | Strongest published result on this corpus, but uses ~2.6x more training data than exists in the public corpus, per-channel labels, and a much larger model; not reproducible from public data alone |
+| **This work** | Multi-head CNN (~0.5M params) + seed ensemble | Helsinki only (49-52 patients/fold) | Helsinki, **strict 5-fold patient-wise CV**, tuning on validation only | **Pooled AUC 0.809 +/- 0.052**; AUC by expert 0.767-0.808; GDR 29% @ 0.5 FD/h | Strictest fully-internal protocol we could define; additionally delivers the first quantified annotator-transfer matrix and aetiology stratification on this corpus |
+
+**How to read this comparison.** The published 0.96-0.99 results each relax at least one constraint
+relative to ours: external training data (Hogan), external testing after training on the whole
+corpus (Daly), a more permissive metric (Tapani's median-per-patient), or pre-deep-learning
+feature pipelines (Frassineti). Under a same-data, same-patients, same-tuning protocol, our
+0.809 +/- 0.052 is, to our knowledge, the strongest fully-internal, fully-patient-disjoint result
+reported with released predictions — and our ablations show that reaching the published headline
+numbers from public data alone would require either relaxing the protocol or new training data.
+That conclusion, and the quantified protocol sensitivities behind it, is itself a finding of this
+work.
+
+---
+
+
+## 8. Building on This Work
 
 Concrete next steps (also discussed in the paper's Discussion/Limitations):
 
@@ -305,7 +364,7 @@ Concrete next steps (also discussed in the paper's Discussion/Limitations):
 
 ---
 
-## 8. Citation
+## 9. Citation
 
 If you use this code, please cite the dataset paper (mandatory under CC-BY 4.0) and this work:
 
@@ -325,7 +384,7 @@ If you use this code, please cite the dataset paper (mandatory under CC-BY 4.0) 
 
 ---
 
-## 9. Licence and Ethics
+## 10. Licence and Ethics
 
 - **Dataset**: not redistributed here; users must download it directly from Zenodo and comply with
   its **CC-BY 4.0** licence (attribution, no re-identification, no redistribution of raw data).
@@ -334,7 +393,7 @@ If you use this code, please cite the dataset paper (mandatory under CC-BY 4.0) 
 - All data are de-identified; no IRB approval is required to download. The manuscript reports a
   retrospective analysis of an open, de-identified corpus.
 
-## 10. Acknowledgements
+## 11. Acknowledgements
 
 Pipeline built with MNE-Python, scikit-learn, LightGBM and PyTorch. We thank the authors of the
 Helsinki dataset for their exemplary open-science practice, and Daly, Lightbody & Temko and
